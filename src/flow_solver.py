@@ -1,5 +1,6 @@
-from dolfin import *
+from jet_bcs import JetBCValue
 import numpy as np
+from dolfin import *
 
 
 class FlowSolver(object):
@@ -10,10 +11,9 @@ class FlowSolver(object):
         rho = Constant(flow_params['rho'])            # density
 
         mesh_file = geometry_params['mesh']
-        print(mesh_file)
 
         # Load mesh with markers
-        comm = mpi_comm_world()
+        comm = mpi_comm_self()  # Don't share
         h5 = HDF5File(comm, mesh_file, 'r')
         mesh = Mesh()
         h5.read(mesh, 'mesh', False)
@@ -25,7 +25,8 @@ class FlowSolver(object):
         inlet_tag = 3
         outlet_tag = 2
         wall_tag = 1
-        cylinder_noslip_tag = 4  # The entire surface
+        cylinder_noslip_tag = 4
+        # Tags 5 and higher are jets
 
         # Define function spaces
         V = VectorFunctionSpace(mesh, 'CG', 2)
@@ -36,13 +37,11 @@ class FlowSolver(object):
         p, q = TrialFunction(Q), TestFunction(Q)
 
         u_n, p_n = Function(V), Function(Q)
+        comm = mesh.mpi_comm()
         # Starting from rest or are we given the initial state
-        for path, func, name in zip(('u_init', 'p_init'), (u_n, p_n), ('u0', 'p0')):
+        for path, func, name in zip(('u0_file', 'p0_file'), (u_n, p_n), ('u0', 'p0')):
             if path in flow_params:
-                comm = mesh.mpi_comm()
-
                 XDMFFile(comm, flow_params[path]).read_checkpoint(func, name, 0)
-                # assert func.vector().norm('l2') > 0
 
         u_, p_ = Function(V), Function(Q)  # Solve into these
 
@@ -73,20 +72,33 @@ class FlowSolver(object):
         a3 = dot(u, v)*dx
         L3 = dot(u_, v)*dx - dt*dot(nabla_grad(p_ - p_n), v)*dx
 
-        inflow_profile = flow_params['inflow_profile'](mesh, degree=2)
+        inflow_profile = flow_params.get('inflow_profile',
+                                         FlowSolver.inflow_profile)(mesh, degree=2)
         # Define boundary conditions, first those that are constant in time
         bcu_inlet = DirichletBC(V, inflow_profile, surfaces, inlet_tag)
         # No slip
         bcu_wall = DirichletBC(V, Constant((0, 0)), surfaces, wall_tag)
+        bcu_cyl_wall = DirichletBC(V, Constant((0, 0)), surfaces, cylinder_noslip_tag)
         # Fixing outflow pressure
         bcp_outflow = DirichletBC(Q, Constant(0), surfaces, outlet_tag)
-        # Rotation of the cylinder
-        cylinder_bc_value = Expression(('A*x[1]/sqrt(x[0]*x[0] + x[1]*x[1])',
-                                        '-A*x[0]/sqrt(x[0]*x[0] + x[1]*x[1])'), degree=1, A=0)
-        bcu_cylinder = [DirichletBC(V, cylinder_bc_value, surfaces, cylinder_noslip_tag)]
+
+        # Now the expression for the jets
+        # NOTE: they start with Q=0
+        radius = geometry_params['jet_radius']
+        width = geometry_params['jet_width']
+        positions = geometry_params['jet_positions']
+
+        bcu_jet = []
+        jet_tags = range(cylinder_noslip_tag+1, cylinder_noslip_tag+1+len(positions))
+
+        jets = [JetBCValue(radius, width, theta0, Q=0, degree=1) for theta0 in positions]
+
+        for tag, jet in zip(jet_tags, jets):
+            bc = DirichletBC(V, jet, surfaces, tag)
+            bcu_jet.append(bc)
 
         # All bcs objects togets
-        bcu = [bcu_inlet, bcu_wall] + bcu_cylinder
+        bcu = [bcu_inlet, bcu_wall, bcu_cyl_wall] + bcu_jet
         bcp = [bcp_outflow]
 
         As = [Matrix() for i in range(3)]
@@ -126,7 +138,7 @@ class FlowSolver(object):
         gtime = 0.  # External clock
 
         # Things to remeber for evolution
-        self.cylinder_bc_value = cylinder_bc_value
+        self.jets = jets
         # Keep track of time so that we can query it outside
         self.gtime, self.dt = gtime, dt
         # Remember inflow profile function in case it is time dependent
@@ -149,12 +161,14 @@ class FlowSolver(object):
         self.viscosity = mu
         self.density = rho
         self.normal = n
-        self.cylinder_surface_tags = [cylinder_noslip_tag]
+        self.cylinder_surface_tags = [cylinder_noslip_tag] + jet_tags
 
-    def evolve(self, bc_value):
+    def evolve(self, jet_bc_values):
         '''Make one time step with the given values of jet boundary conditions'''
-        assert len(bc_value) == 1
-        self.cylinder_bc_value.A = bc_value[0]
+        assert len(jet_bc_values) == len(self.jets)
+
+        # Update bc expressions
+        for Q, jet in zip(jet_bc_values, self.jets): jet.Q = Q
 
         # Make a step
         self.gtime += self.dt(0)
@@ -187,6 +201,18 @@ class FlowSolver(object):
         # Share with the world
         return u_, p_, solution_okay
 
+    @staticmethod
+    def inflow_profile(mesh, degree):
+        '''Parabolic with no slip on vertical'''
+        bot = mesh.coordinates().min(axis=0)[1]
+        top = mesh.coordinates().max(axis=0)[1]
+        H = top - bot
+
+        Um = 1.5
+
+        return Expression(('-4*Um*(x[1]-bot)*(x[1]-top)/H/H',
+                           '0'), bot=bot, top=top, H=H, Um=Um, degree=degree)
+
 # --------------------------------------------------------------------
 
 if __name__ == '__main__':
@@ -196,6 +222,8 @@ if __name__ == '__main__':
     import os
     
     # Start with mesh - goal is to crete ./mesh/mesh.h5
+    h5_path = './mesh/mesh.h5'
+    
     geometry_params = {'output': 'mesh.geo',
                        'length': 2.2,
                        'front_distance': 0.05 + 0.15,
@@ -206,150 +234,52 @@ if __name__ == '__main__':
                        'jet_width': 10,
                        'clscale': 1.0}
 
-    generate_mesh(geometry_params, template='geometry_2d.template_geo')
-    # Convert to H5
-    h5_path = './meshes/mesh.h5'
-    (not os.path.exists(os.path.dirname(h5_path))) and os.mkdir(os.path.dirname(h5_path))
+    if not os.path.exists(h5_path):
+        generate_mesh(geometry_params, template='geometry_2d.template_geo')
+        # Convert to H5
+        not os.path.exists(os.path.dirname(h5_path)) and os.mkdir(os.path.dirname(h5_path))
     
-    convert('mesh.msh', h5_path)
-    cleanup(exts=('.xml', '.msh'))
-    # #    simulation_duration = 2.0 #duree en secondes de la simulation
-    # #dt=0.0005
+        convert('mesh.msh', h5_path)
+        cleanup(exts=('.xml', '.msh'))
 
-    # #root = 'mesh/turek_2d'
-    # #if(not os.path.exists('mesh')):
-    # #    os.mkdir('mesh')
+        
+    # With same dt and duration as with RL make the base flow
+    dt = 0.0005
+    solver_params = {'dt': dt}
 
-    # #jet_angle = 0
+    flow_params = {'mu': 1E-3,
+                   'rho': 1}
 
+    # Is there nonzero flow?
+    u0_file, p0_file = 'mesh/u_init.xdmf', 'mesh/p_init.xdmf'
+    if os.path.exists(u0_file) and os.path.exists(p0_file):
+        flow_params['u0_file'] = u0_file
+        flow_params['p0_file'] = p0_file
+    
+    geometry_params['mesh'] = h5_path
 
-    # def profile(mesh, degree):
-    #     bot = mesh.coordinates().min(axis=0)[1]
-    #     top = mesh.coordinates().max(axis=0)[1]
-    #     print bot, top
-    #     H = top - bot
+    solver = FlowSolver(flow_params, geometry_params, solver_params)
+    print 'Initial state', solver.u_n.vector().norm('l2'), solver.p_n.vector().norm('l2')
 
-    #     Um = 1.5
+    njets = len(geometry_params['jet_positions'])
+    u_file = File('results/base_u.pvd')
+    p_file = File('results/base_p.pvd')
+    
+    step = 0
+    while solver.gtime < 5.0:
+        step += 1
+        uh, ph, status = solver.evolve(np.zeros(njets))
+        
+        # Plotting for debug
+        if step % 40 == 0:
+            u_file << uh, solver.gtime
+            p_file << ph, solver.gtime
+            print 'Solver time', solver.gtime, status
+            
+    # Final flow field which can be loaded
+    encoding = XDMFFile.Encoding_HDF5
+    comm = uh.function_space().mesh().mpi_comm()
 
-    #     return Expression(('-4*Um*(x[1]-bot)*(x[1]-top)/H/H',
-    #                     '0'), bot=bot, top=top, H=H, Um=Um, degree=degree)
-
-    # flow_params = {'mu': 1E-3,
-    #               'rho': 1,
-    #               'inflow_profile': profile}
-
-    # solver_params = {'dt': dt}
-
-    # list_position_probes = []
-
-    # positions_probes_for_grid_x = [0.075, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45]
-    # positions_probes_for_grid_y = [-0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15]
-
-    # for crrt_x in positions_probes_for_grid_x:
-    #     for crrt_y in positions_probes_for_grid_y:
-    #         list_position_probes.append(np.array([crrt_x, crrt_y]))
-
-    # positions_probes_for_grid_x = [-0.025, 0.0, 0.025, 0.05]
-    # positions_probes_for_grid_y = [-0.15, -0.1, 0.1, 0.15]
-
-    # for crrt_x in positions_probes_for_grid_x:
-    #     for crrt_y in positions_probes_for_grid_y:
-    #         list_position_probes.append(np.array([crrt_x, crrt_y]))
-
-    # list_radius_around = [geometry_params['jet_radius'] + 0.02, geometry_params['jet_radius'] + 0.05]
-    # list_angles_around = np.arange(0, 360, 10)
-
-    # for crrt_radius in list_radius_around:
-    #     for crrt_angle in list_angles_around:
-    #         angle_rad = np.pi * crrt_angle / 180.0
-    #         list_position_probes.append(np.array([crrt_radius * math.cos(angle_rad), crrt_radius * math.sin(angle_rad)]))
-
-    # output_params = {'locations': list_position_probes,
-    #                  'probe_type': 'pressure'
-    #                  }
-
-    # optimization_params = {"num_steps_in_pressure_history": 1,
-    #                     "min_value_jet_MFR": -1e-2,
-    #                     "max_value_jet_MFR": 1e-2,
-    #                     "smooth_control": (nb_actuations/dt)*(0.1*0.0005/80),
-    #                     "zero_net_Qs": True,
-    #                     "random_start": random_start}
-
-    # inspection_params = {"plot": plot,
-    #                     "step": step,
-    #                     "dump": dump,
-    #                     "range_pressure_plot": [-2.0, 1],
-    #                     "range_drag_plot": [-0.175, -0.13],
-    #                     "range_lift_plot": [-0.2, +0.2],
-    #                     "line_drag": -0.1595,
-    #                     "line_lift": 0,
-    #                     "show_all_at_reset": False,
-    #                     "single_run":single_run
-    #                     }
-
-    # reward_function = 'drag_plain_lift'
-
-    # verbose = 0
-
-    # number_steps_execution = int((simulation_duration/dt)/nb_actuations)
-
-    # # ---------------------------------------------------------------------------------
-    # # do the initialization
-
-    # #On fait varier la valeur de n-iter en fonction de si on remesh
-    # if(remesh):
-    #     n_iter = int(5.0 / dt)
-    #     if(os.path.exists('mesh')):
-    #         shutil.rmtree('mesh')
-    #     os.mkdir('mesh')
-    #     print("Make converge initial state for {} iterations".format(n_iter))
-    # else:
-    #     n_iter = None
-
-
-    # #Processing the name of the simulation
-
-    # simu_name = 'Simu'
-
-    # if (geometry_params["jet_positions"][0] - 90) != 0:
-    #     next_param = 'A' + str(geometry_params["jet_positions"][0] - 90)
-    #     simu_name = '_'.join([simu_name, next_param])
-    # if geometry_params["cylinder_size"] != 0.01:
-    #     next_param = 'M' + str(geometry_params["cylinder_size"])[2:]
-    #     simu_name = '_'.join([simu_name, next_param])
-    # if optimization_params["max_value_jet_MFR"] != 0.01:
-    #     next_param = 'maxF' + str(optimization_params["max_value_jet_MFR"])[2:]
-    #     simu_name = '_'.join([simu_name, next_param])
-    # if nb_actuations != 80:
-    #     next_param = 'NbAct' + str(nb_actuations)
-    #     simu_name = '_'.join([simu_name, next_param])
-    # next_param = 'drag'
-    # if reward_function == 'recirculation_area':
-    #     next_param = 'area'
-    # if reward_function == 'max_recirculation_area':
-    #     next_param = 'max_area'
-    # elif reward_function == 'drag':
-    #     next_param = 'last_drag'
-    # elif reward_function == 'max_plain_drag':
-    #     next_param = 'max_plain_drag'
-    # elif reward_function == 'drag_plain_lift':
-    #     next_param = 'lift'
-    # elif reward_function == 'drag_avg_abs_lift':
-    #     next_param = 'avgAbsLift'
-    # simu_name = '_'.join([simu_name, next_param])
-
-    # env_2d_cylinder = Env2DCylinder(path_root=root,
-    #                                 geometry_params=geometry_params,
-    #                                 flow_params=flow_params,
-    #                                 solver_params=solver_params,
-    #                                 output_params=output_params,
-    #                                 optimization_params=optimization_params,
-    #                                 inspection_params=inspection_params,
-    #                                 n_iter_make_ready=n_iter,  # On recalcule si besoin
-    #                                 verbose=verbose,
-    #                                 reward_function=reward_function,
-    #                                 number_steps_execution=number_steps_execution,
-    #                                 simu_name = simu_name)
-
-    # return(env_2d_cylinder)
-
+    # Save field data
+    XDMFFile(comm, u0_file).write_checkpoint(uh, 'u0', 0, encoding)
+    XDMFFile(comm, p0_file).write_checkpoint(ph, 'p0', 0, encoding)
