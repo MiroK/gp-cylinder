@@ -242,7 +242,6 @@ if __name__ == '__main__':
         convert('mesh.msh', h5_path)
         cleanup(exts=('.xml', '.msh'))
 
-        
     # With same dt and duration as with RL make the base flow
     dt = 0.0005
     solver_params = {'dt': dt}
