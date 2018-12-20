@@ -131,7 +131,7 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
     avg_abs_lift = np.mean(lift_past[-avg_length:])
     avg_drag = np.mean(drag_past[-avg_length:])
     
-    score =  avg_drag + 0.159 - 0.2*avg_abs_lift
+    score =  -avg_drag # + 0.159 - 0.2*avg_abs_lift
 
     # Weight the cost by when things broke
     if not evolve_okay:
@@ -184,16 +184,15 @@ if __name__ == '__main__':
                            'smooth_control': 0,
                            'probe_positions': probe_positions}
 
-    
     params = {'geometry': geometry_params,
               'flow': flow_params,
               'solver': solver_params,
               'optim': optimization_params}
 
     history = {}
-    control = lambda t, p0, p1, p2, p3: 1E-3*np.sin(np.pi*t)
+    control = lambda t, p0, p1, p2, p3: 1E-2*np.sin(4*np.pi*t)
 
-    vtk_io = VTKIO('./results/test/test_', ['uh', 'ph'], 20)
+    vtk_io = VTKIO('./results/test/test_', ['uh', 'ph'], 1)
     np_io = NumpyIO('./results/test/test.txt', 20)
     
     print eval_control(control, params, history, vtk_io=vtk_io, np_io=np_io)
