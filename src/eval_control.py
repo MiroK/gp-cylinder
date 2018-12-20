@@ -74,7 +74,8 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
     # Evolve the environment
     T_terminal = params['optim']['T_term']
     alpha = params['optim']['smooth_control']
-    nsmooth_steps = int(T_terminal/params['solver']['dt']/params['optim']['ncontrol'])
+    nsmooth_steps = int(params['optim']['dt_control']/params['solver']['dt'])
+    assert nsmooth_steps >= 1
 
     # Record history of control, readings, drag ...
     time_past, control_past, pressure_past, drag_past, lift_past = [], [], [], [], []
@@ -180,8 +181,8 @@ if __name__ == '__main__':
     probe_positions = np.c_[radius*np.cos(angles), radius*np.sin(angles)]
 
     optimization_params = {'T_term': 2,
-                           'ncontrol': 80,
-                           'smooth_control': 0,
+                           'dt_control': 20*solver_params['dt'],
+                           'smooth_control': 0.1,
                            'probe_positions': probe_positions}
 
     params = {'geometry': geometry_params,

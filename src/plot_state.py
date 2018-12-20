@@ -30,12 +30,14 @@ def plot_state(path, nprobes=4):
     for p in pressure: state.plot(time, p)
 
     
-    ctrl.plot(time, control, 'k-', label='control')
+    lines = [ctrl.plot(time, control, 'k-', label='control')[0]]
     # Make the y-axis label, ticks and tick labels match the line color.
 
     ax2 = ctrl.twinx()
-    ax2.plot(time, drag, 'r', label='drag')
-    ax2.plot(time, lift, 'b', label='lift')
+    lines.append(ax2.plot(time, drag, 'r', label='drag')[0])
+    lines.append(ax2.plot(time, lift, 'b', label='lift')[0])
+
+    ax2.legend(lines, [l.get_label() for l in lines], loc='best')
 
 # --------------------------------------------------------------------
 
