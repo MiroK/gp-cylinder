@@ -1,6 +1,6 @@
 from probes import PressureProbeANN, DragProbeANN, LiftProbeANN
 from flow_solver import FlowSolver
-from dolfin import File
+from dolfin import File, MPI, mpi_comm_world
 import numpy as np
 
 
@@ -71,7 +71,7 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
     Q = 0
     uh, ph, status = solver.evolve(Q*np.ones(len(params['geometry']['jet_positions'])))
     
-    # Evolve the environment
+    # # Evolve the environment
     T_terminal = params['optim']['T_term']
     alpha = params['optim']['smooth_control']
     nsmooth_steps = int(params['optim']['dt_control']/params['solver']['dt'])
@@ -164,14 +164,14 @@ if __name__ == '__main__':
     geometry_params = {'jet_radius': 0.05,
                        'jet_positions': [90, 270],
                        'jet_width': 10,
-                       'mesh': './mesh/mesh.h5'}
+                       'mesh': ('./mesh/mesh.xml', './mesh/mesh_facet_region.xml')}
 
     solver_params = {'dt': 5E-4}
 
     flow_params = {'mu': 1E-3,
                    'rho': 1,
-                   'u0_file': './mesh/u_init.xdmf',
-                   'p0_file': './mesh/p_init.xdmf'}
+                   'u0_file': './mesh/u_init000000.vtu',
+                   'p0_file': './mesh/p_init000000.vtu'}
 
     # Optimization
     angles = np.linspace(0, 2*np.pi, 10, endpoint=False)
@@ -191,9 +191,13 @@ if __name__ == '__main__':
               'optim': optimization_params}
 
     history = {}
-    control = lambda t, p0, p1, p2, p3: 1E-2*np.sin(4*np.pi*t)
+    controls = [lambda t, p0, p1, p2, p3: 1E-2*np.sin(4*np.pi*t),
+                lambda t, p0, p1, p2, p3: 1E-2*np.sin(2*np.pi*t)]
+    # Each cpu runs different
+    rank = MPI.rank(mpi_comm_world())
+    control = controls[rank]
 
-    vtk_io = VTKIO('./results/test/test_', ['uh', 'ph'], 1)
-    np_io = NumpyIO('./results/test/test.txt', 20)
+    vtk_io = VTKIO('./results/test/test_rank%d_' % rank, ['uh', 'ph'], 1)
+    np_io = NumpyIO('./results/test/test_%d.txt' % rank, 20)
     
-    print eval_control(control, params, history, vtk_io=vtk_io, np_io=np_io)
+    print rank, eval_control(control, params, history, vtk_io=vtk_io, np_io=np_io)

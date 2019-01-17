@@ -1,4 +1,5 @@
 from jet_bcs import JetBCValue
+from utils import read_vtu_function
 import numpy as np
 from dolfin import *
 
@@ -10,16 +11,12 @@ class FlowSolver(object):
         mu = Constant(flow_params['mu'])              # dynamic viscosity
         rho = Constant(flow_params['rho'])            # density
 
-        mesh_file = geometry_params['mesh']
+        mesh_file, surface_file = geometry_params['mesh']
 
         # Load mesh with markers
         comm = mpi_comm_self()  # Don't share
-        h5 = HDF5File(comm, mesh_file, 'r')
-        mesh = Mesh()
-        h5.read(mesh, 'mesh', False)
-
-        surfaces = MeshFunction('size_t', mesh, mesh.topology().dim()-1)
-        h5.read(surfaces, 'facet')
+        mesh = Mesh(comm, mesh_file)
+        surfaces = MeshFunction('size_t', mesh, surface_file)
 
         # These tags should be hardcoded by gmsh during generation
         inlet_tag = 3
@@ -36,12 +33,16 @@ class FlowSolver(object):
         u, v = TrialFunction(V), TestFunction(V)
         p, q = TrialFunction(Q), TestFunction(Q)
 
-        u_n, p_n = Function(V), Function(Q)
-        comm = mesh.mpi_comm()
+        # NOTE: VTK stores only P1 functions so
+        u_p1, p_n = Function(VectorFunctionSpace(mesh, 'CG', 1)), Function(Q)
+
         # Starting from rest or are we given the initial state
-        for path, func, name in zip(('u0_file', 'p0_file'), (u_n, p_n), ('u0', 'p0')):
+        for path, func in zip(('u0_file', 'p0_file'), (u_p1, p_n)):
             if path in flow_params:
-                XDMFFile(comm, flow_params[path]).read_checkpoint(func, name, 0)
+                foo = read_vtu_function(flow_params[path], func.function_space())[0]
+                func.assign(foo)
+        # Get P2 velocity
+        u_n = project(u_p1, V)
 
         u_, p_ = Function(V), Function(Q)  # Solve into these
 
@@ -101,8 +102,8 @@ class FlowSolver(object):
         bcu = [bcu_inlet, bcu_wall, bcu_cyl_wall] + bcu_jet
         bcp = [bcp_outflow]
 
-        As = [Matrix() for i in range(3)]
-        bs = [Vector() for i in range(3)]
+        As = [Matrix(comm) for i in range(3)]
+        bs = [Vector(comm) for i in range(3)]
 
         # Assemble matrices
         assemblers = [SystemAssembler(a1, L1, bcu),
@@ -118,7 +119,7 @@ class FlowSolver(object):
         assert solver_type in ('lu', 'la_solve')
 
         if solver_type == 'lu':
-            solvers = map(lambda x: LUSolver("mumps"), range(3))
+            solvers = map(lambda x: LUSolver('mumps'), range(3))
         else:
             solvers = [KrylovSolver('bicgstab', 'hypre_amg'),  # Very questionable preconditioner
                        KrylovSolver('cg', 'hypre_amg'),
@@ -219,10 +220,13 @@ if __name__ == '__main__':
     # This gives an evolved flow state from which control starts
     from generate_msh import generate_mesh
     from msh_convert import convert, cleanup
-    import os
+    import os, glob, shutil
+
+    assert MPI.size(mpi_comm_world()) == 1
     
-    # Start with mesh - goal is to crete ./mesh/mesh.h5
-    h5_path = './mesh/mesh.h5'
+    # Start with mesh - goal is to crete ./mesh.xml
+    mesh_path = './mesh/mesh.xml'
+    surface_path = './mesh/mesh_facet_region.xml'
     
     geometry_params = {'output': 'mesh.geo',
                        'length': 2.2,
@@ -234,14 +238,17 @@ if __name__ == '__main__':
                        'jet_width': 10,
                        'clscale': 1.0}
 
-    if not os.path.exists(h5_path):
+    if not os.path.exists(mesh_path):
         generate_mesh(geometry_params, template='geometry_2d.template_geo')
         # Convert to H5
-        not os.path.exists(os.path.dirname(h5_path)) and os.mkdir(os.path.dirname(h5_path))
+        not os.path.exists(os.path.dirname(mesh_path)) and os.mkdir(os.path.dirname(mesh_path))
     
-        convert('mesh.msh', h5_path)
-        cleanup(exts=('.xml', '.msh'))
+        convert('mesh.msh', 'mesh.h5')
+        cleanup(exts=('.msh', ))
 
+        shutil.move('mesh.xml', mesh_path)
+        shutil.move('mesh_facet_region.xml', surface_path)
+        
     # With same dt and duration as with RL make the base flow
     dt = 0.0005
     solver_params = {'dt': dt}
@@ -250,12 +257,12 @@ if __name__ == '__main__':
                    'rho': 1}
 
     # Is there nonzero flow?
-    u0_file, p0_file = 'mesh/u_init.xdmf', 'mesh/p_init.xdmf'
+    u0_file, p0_file = 'mesh/u_init000000.vtu', 'mesh/p_init000000.vtu'
     if os.path.exists(u0_file) and os.path.exists(p0_file):
         flow_params['u0_file'] = u0_file
         flow_params['p0_file'] = p0_file
     
-    geometry_params['mesh'] = h5_path
+    geometry_params['mesh'] = (mesh_path, surface_path)
 
     solver = FlowSolver(flow_params, geometry_params, solver_params)
     print 'Initial state', solver.u_n.vector().norm('l2'), solver.p_n.vector().norm('l2')
@@ -265,7 +272,7 @@ if __name__ == '__main__':
     p_file = File('results/base_p.pvd')
     
     step = 0
-    while solver.gtime < 5.0:
+    while solver.gtime < 0.2:
         step += 1
         uh, ph, status = solver.evolve(np.zeros(njets))
         
@@ -274,11 +281,6 @@ if __name__ == '__main__':
             u_file << uh, solver.gtime
             p_file << ph, solver.gtime
             print 'Solver time', solver.gtime, status
-            
     # Final flow field which can be loaded
-    encoding = XDMFFile.Encoding_HDF5
-    comm = uh.function_space().mesh().mpi_comm()
-
-    # Save field data
-    XDMFFile(comm, u0_file).write_checkpoint(uh, 'u0', 0, encoding)
-    XDMFFile(comm, p0_file).write_checkpoint(ph, 'p0', 0, encoding)
+    File('./mesh/u_init.pvd') << uh
+    File('./mesh/p_init.pvd') << ph

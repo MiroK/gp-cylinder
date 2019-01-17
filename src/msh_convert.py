@@ -59,7 +59,7 @@ if __name__ == '__main__':
     parser.set_defaults(save=True)
     # Remove Xml and stuff
     parser.add_argument('--cleanup', type=str, nargs='+',
-                        help='extensions to delete', default=('.xml', ))
+                        help='extensions to delete', default=())
     args = parser.parse_args()
 
     # Protecting self
