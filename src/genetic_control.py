@@ -54,12 +54,12 @@ def eval_control_config(control, toolbox, params=params):
 
     return (v, )
 
-#
-#
-#
-#
-#
-#
+# TODO
+# - reward
+# - solver and eval params as in RL
+# - capping
+# - make sure that init okay
+# - primitives
 #
 #
 
