@@ -96,7 +96,7 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
         evolve_okay = isfinite(pressure_values)
         if not evolve_okay: break
         
-        action = control(solver.gtime, *pressure_values)
+        action = control(solver.gtime, *pressure_values.flatten())
         for _ in range(nsmooth_steps):
             # Smoothed action (like RL)
             if alpha:
