@@ -56,90 +56,98 @@ def isfinite(values):
     return not np.any(np.isinf(values)) and not np.any(np.isnan(values))
 
 
-def eval_control(control, params, history=None, vtk_io=None, np_io=None):
+class ControlEvaluator(object):
     '''Evolve environment by f: (t, probe readings) -> scalar'''
-    # Setup flow solver
-    print control, '?'
-    solver = FlowSolver(params['flow'], params['geometry'], params['solver'])
-    print '\tsolver'
-    # Setup probes
-    pressures = PressureProbeANN(solver, params['optim']['probe_positions'])
-    drag = DragProbeANN(solver)
-    lift = LiftProbeANN(solver)
+    def __init__(self, params):
+        # Setup flow solver and probes ONCE
+        solver = FlowSolver(params['flow'], params['geometry'], params['solver'])
+        # Setup probes
+        pressures = PressureProbeANN(solver, params['optim']['probe_positions'])
+        drag = DragProbeANN(solver)
+        lift = LiftProbeANN(solver)
 
-    # Keep track of one jet value. Other is -jet
-    Q = 0
-    print '>>>'
-    uh, ph, status = solver.evolve(Q*np.ones(len(params['geometry']['jet_positions'])))
-    print 'xx'
-    # # Evolve the environment
-    T_terminal = params['optim']['T_term']
-    alpha = params['optim']['smooth_control']
-    nsmooth_steps = int(params['optim']['dt_control']/params['solver']['dt'])
-    assert nsmooth_steps >= 1
+        self.solver, self.pressures, self.drag, self.lift = solver, pressures, drag, lift
+        # Remember params
+        self.params = params
+        
+    def eval_control(self, control, history=None, vtk_io=None, np_io=None):
+        '''Do it with f'''        
+        solver, pressures, drag, lift = self.solver, self.pressures, self.drag, self.lift
+        params = self.params
+        # The solver need to be reset to start eval of the control
+        solver.set_initial_condition(params['flow'])
+        
+        # Keep track of one jet value. Other is -jet
+        Q = 0
+        uh, ph, status = solver.evolve(Q*np.ones(len(params['geometry']['jet_positions'])))
+        # Evolve the environment
+        T_terminal = params['optim']['T_term']
+        alpha = params['optim']['smooth_control']
+        nsmooth_steps = int(params['optim']['dt_control']/params['solver']['dt'])
+        assert nsmooth_steps >= 1
 
-    # Record history of control, readings, drag ...
-    time_past, control_past, pressure_past, drag_past, lift_past = [], [], [], [], []
-    # All
-    past = {'time': time_past,
-            'control': control_past,
-            'pressure': pressure_past,
-            'drag': drag_past,
-            'lift': lift_past}
+        # Record history of control, readings, drag ...
+        time_past, control_past, pressure_past, drag_past, lift_past = [], [], [], [], []
+        # All
+        past = {'time': time_past,
+                'control': control_past,
+                'pressure': pressure_past,
+                'drag': drag_past,
+                'lift': lift_past}
     
-    last_state = lambda past=past: tuple(past[key][-1] for key in past)
+        last_state = lambda past=past: tuple(past[key][-1] for key in past)
     
-    evolve_okay = True
-    while solver.gtime < T_terminal and evolve_okay:
-        pressure_values = pressures.sample(uh, ph)
-        
-        evolve_okay = isfinite(pressure_values)
-        if not evolve_okay: break
-        
-        action = control(solver.gtime, *pressure_values.flatten())
-        for _ in range(nsmooth_steps):
-            # Smoothed action (like RL)
-            if alpha:
-                Q += alpha*(action - Q)
-            else:
-                Q = action
-            # At time t the action was Q and it resulted in pressure and drag
-            time_past.append(solver.gtime)
-            control_past.append(Q)
-                
-            uh, ph, status = solver.evolve(np.array([Q, -Q]))
-            pressure_past.append(np.hstack(pressures.sample(uh, ph)).tolist())
-            # Debug
-            vtk_io is not None and vtk_io((uh, ph))
+        evolve_okay = True
+        while solver.gtime < T_terminal and evolve_okay:
+            pressure_values = pressures.sample(uh, ph)
             
-            # Instant 
-            drag_value, lift_value = drag.sample(uh, ph), lift.sample(uh, ph)
-            drag_past.append(drag_value)
-            lift_past.append(lift_value)
-            # Debug
-            np_io is not None and np_io(past)
-
-            # Finite?
-            evolve_okay = all((status, isfinite(drag_value), isfinite(lift_value)))
+            evolve_okay = isfinite(pressure_values)
             if not evolve_okay: break
             
-        if not evolve_okay: break
+            action = control(solver.gtime, *pressure_values.flatten())
+            for _ in range(nsmooth_steps):
+                # Smoothed action (like RL)
+                if alpha:
+                    Q += alpha*(action - Q)
+                else:
+                    Q = action
+                # At time t the action was Q and it resulted in pressure and drag
+                time_past.append(solver.gtime)
+                control_past.append(Q)
+                    
+                uh, ph, status = solver.evolve(np.array([Q, -Q]))
+                pressure_past.append(np.hstack(pressures.sample(uh, ph)).tolist())
+                # Debug
+                vtk_io is not None and vtk_io((uh, ph))
+                
+                # Instant 
+                drag_value, lift_value = drag.sample(uh, ph), lift.sample(uh, ph)
+                drag_past.append(drag_value)
+                lift_past.append(lift_value)
+                # Debug
+                np_io is not None and np_io(past)
 
-    # Accumulated drag (like RL)
-    avg_length = min(500, len(drag_past))
-    avg_abs_lift = np.mean(lift_past[-avg_length:])
-    avg_drag = np.mean(drag_past[-avg_length:])
-    
-    score =  -avg_drag # + 0.159 - 0.2*avg_abs_lift
+                # Finite?
+                evolve_okay = all((status, isfinite(drag_value), isfinite(lift_value)))
+                if not evolve_okay: break
+                
+            if not evolve_okay: break
 
-    # Fix history
-    if history is not None:
-        l = min(*map(len, past.values()))
-    
-        for field, f in past.items():
-            history[field] = f[:l]
+        # Accumulated drag (like RL)
+        avg_length = min(500, len(drag_past))
+        avg_abs_lift = np.mean(lift_past[-avg_length:])
+        avg_drag = np.mean(drag_past[-avg_length:])
+        
+        score =  -avg_drag # + 0.159 - 0.2*avg_abs_lift
 
-    return (score, evolve_okay, (solver.gtime, T_terminal))
+        # Fix history
+        if history is not None:
+            l = min(*map(len, past.values()))
+        
+            for field, f in past.items():
+                history[field] = f[:l]
+
+        return (score, evolve_okay, (solver.gtime, T_terminal))
 
 # ---------------------------------------------------------------------
 
@@ -165,7 +173,7 @@ if __name__ == '__main__':
     radius = geometry_params['jet_radius']
     probe_positions = np.c_[radius*np.cos(angles), radius*np.sin(angles)]
 
-    optimization_params = {'T_term': 2,
+    optimization_params = {'T_term': 0.2,
                            'dt_control': 20*solver_params['dt'],
                            'smooth_control': 0.1,
                            'probe_positions': probe_positions}
@@ -175,14 +183,21 @@ if __name__ == '__main__':
               'solver': solver_params,
               'optim': optimization_params}
 
-    history = {}
-    controls = [lambda t, p0, p1, p2, p3: 1E-2*np.sin(4*np.pi*t),
-                lambda t, p0, p1, p2, p3: 1E-2*np.sin(2*np.pi*t)]
+    controls = [[lambda t, p0, p1, p2, p3: 1E-2*np.sin(4*np.pi*t),
+                 lambda t, p0, p1, p2, p3: 1E-2*np.cos(4*np.pi*t)],
+                [lambda t, p0, p1, p2, p3: 1E-2*np.sin(2*np.pi*t),
+                 lambda t, p0, p1, p2, p3: 1E-2*np.cos(2*np.pi*t)]]
+    
     # Each cpu runs different
     rank = MPI.rank(mpi_comm_world())
     control = controls[rank]
 
-    vtk_io = VTKIO('./results/test/test_rank%d_' % rank, ['uh', 'ph'], 1)
-    np_io = NumpyIO('./results/test/test_%d.txt' % rank, 20)
-    
-    print rank, eval_control(control, params, history, vtk_io=vtk_io, np_io=np_io)
+    controller = ControlEvaluator(params)
+    print 'Setup controller'
+    for i, f in enumerate(controls[rank]):
+        vtk_io = None 
+        np_io = NumpyIO('./results/test/test_%d_%d.txt' % (rank, i), 20)
+        history = {}
+
+        controller.eval_control(f, history, vtk_io, np_io)
+        print rank, i, 'Done'
