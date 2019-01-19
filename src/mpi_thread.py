@@ -5,8 +5,11 @@ from mpi4py import MPI
 
 def mpi_split(size, comm):
     '''Local sizes of size-d object on processes of comm'''
-    sizes = [size/comm.size]*(comm.size - 1)
-    sizes.append(size - sum(sizes))
+    ncpus = comm.size
+    sizes = []
+    for rank in range(ncpus):
+        sizes.append((size + ncpus - rank - 1)/(ncpus - rank))
+        size -= sizes[-1]
     return sizes
 
 

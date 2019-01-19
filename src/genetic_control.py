@@ -15,9 +15,9 @@ geometry_params = {'jet_radius': 0.05,
 solver_params = {'dt': 5E-4}
 
 flow_params = {'mu': 1E-3,
-               'rho': 1,
-               'u0_file': './mesh/u_init000000.vtu',
-               'p0_file': './mesh/p_init000000.vtu'}
+               'rho': 1}
+               #'u0_file': './mesh/u_init000000.vtu',
+               #'p0_file': './mesh/p_init000000.vtu'}
 
 # Optimization
 angles = np.linspace(0, 2*np.pi, 10, endpoint=False)
@@ -26,7 +26,7 @@ angles = angles[[2, 3, 7, 8]]
 radius = geometry_params['jet_radius']
 probe_positions = np.c_[radius*np.cos(angles), radius*np.sin(angles)]
 
-optimization_params = {'T_term': 2,
+optimization_params = {'T_term': 0.1/4,
                        'dt_control': 20*solver_params['dt'],
                        'smooth_control': 0.1,
                        'probe_positions': probe_positions}
@@ -41,19 +41,28 @@ def eval_control_config(control, toolbox, params=params):
     '''Eval using toolbox compiled control -> 1 tuple'''
     # Each cpu runs different
     hash_control = hash(control)
+    # -121243 is not a good name for file
+    if hash_control < 0:
+        hash_control = -hash_control*10
 
-    vtk_io = VTKIO('./results/test/%s' % hash_control, ['uh', 'ph'], 1)
-    np_io = NumpyIO('./results/test/%s.txt' % hash_control, 20)
+    vtk_io = None #VTKIO('./results/test/%s' % hash_control, ['uh', 'ph'], 1)
+    np_io = None#NumpyIO('./results/test/%s.txt' % hash_control, 20)
 
     ctrl = toolbox.compile(expr=control)
     # Make it expression of time as well and compile eventually
-    f = lambda t, a1, a2, a3, a4, ctrl=ctrl: ctrl(a1, a2, a3, a4)
+    def f(t, a1, a2, a3, a4, ctrl=ctrl):
+        v = ctrl(a1, a2, a3, a4)
+        return min(0.01, v) if v > 0 else max(-0.01, v)
 
     # Decisions about cost should be made here
-    v, status = eval_control(f, params, history=None, vtk_io=vtk_io, np_io=np_io)
+    score, evolve_okay, (t, T) = eval_control(f, params,
+                                              history=None, vtk_io=vtk_io, np_io=np_io)
+    # Solver okay and we reached terminal
+    if evolve_okay and t > T: return (score, )
 
-    return (v, )
-
+    # Others are weighted by relative distance to terminal
+    return (score*math.exp(abs((t - T)*T)), )
+    
 # TODO
 # - reward
 # - solver and eval params as in RL
@@ -84,9 +93,8 @@ if __name__ == "__main__":
     # Start or continue search
     parser.add_argument('-cxpb', type=float, default=0.6, help='Crossover probability')
     parser.add_argument('-mutpb', type=float, default=0.3, help='Mutation probability')
-    parser.add_argument('-ngen', type=int, default=32, help='Number of generations')
-    parser.add_argument('-popsize', type=int, default=1024, help='Number of individuals in generation')
-    parser.add_argument('-nthreads', type=int, default=1, help='Pool size for threaded run')
+    parser.add_argument('-ngen', type=int, default=4, help='Number of generations')
+    parser.add_argument('-popsize', type=int, default=8, help='Number of individuals in generation')
 
     # Eval the loaded state
     plot_parser = parser.add_mutually_exclusive_group(required=False)
@@ -170,12 +178,8 @@ if __name__ == "__main__":
     start_gen = comm.bcast(start_gen, 0)
 
     # Local workers
-    if args.nthreads > 1:
-        pool = multiprocessing.Pool(processes=args.nthreads)
-        map = pool.map
-        
     current_min = sys.float_info.max
-    msg = 'Rank %d processed %d individuals in %g s [%g s / ind]'
+    msg = 'Rank %d processed %d individuals in %g s'
     # Actual search
     for gen in range(start_gen, args.ngen):
         # Root breads
@@ -188,22 +192,20 @@ if __name__ == "__main__":
 
             # Evaluate the individuals with an invalid fitness
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-
         # Turn to string programs and distribute
-        comm.Barrier()
         my_individuals, _ = distribute(map(str, invalid_ind) if comm.rank == 0 else None, comm)
+
         # Locally eval their fitness
         t0 = time.time()
+
         fitnesses = map(fitness, my_individuals)
         dt = time.time()-t0
         nindivs = len(fitnesses)
         
-        print msg % (comm.rank, nindivs, dt, dt/nindivs)
+        print msg % (comm.rank, nindivs, dt)
         
         # Collect on root
-        comm.Barrier()
         fitnesses = collect(np.array(fitnesses, dtype=float), comm)
-
         # Root breeds:
         if comm.rank == 0:
             
@@ -246,8 +248,6 @@ if __name__ == "__main__":
                 state_file = state_file_template % gen
                 with open(state_file, "wb") as cp_file:
                     pickle.dump(cp, cp_file, -1)
-
+                    
         # Let root tell everybody about current_min
         current_min = comm.bcast(current_min, 0)
-
-    args.nthreads > 1 and pool.close()

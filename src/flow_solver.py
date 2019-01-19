@@ -12,12 +12,12 @@ class FlowSolver(object):
         rho = Constant(flow_params['rho'])            # density
 
         mesh_file, surface_file = geometry_params['mesh']
-
+        print 'One'
         # Load mesh with markers
         comm = mpi_comm_self()  # Don't share
         mesh = Mesh(comm, mesh_file)
         surfaces = MeshFunction('size_t', mesh, surface_file)
-
+        print 'Two'
         # These tags should be hardcoded by gmsh during generation
         inlet_tag = 3
         outlet_tag = 2
@@ -43,7 +43,7 @@ class FlowSolver(object):
                 func.assign(foo)
         # Get P2 velocity
         u_n = project(u_p1, V)
-
+        print 'Three'
         u_, p_ = Function(V), Function(Q)  # Solve into these
 
         dt = Constant(solver_params['dt'])
@@ -72,17 +72,19 @@ class FlowSolver(object):
         # Define variational problem for step 3
         a3 = dot(u, v)*dx
         L3 = dot(u_, v)*dx - dt*dot(nabla_grad(p_ - p_n), v)*dx
-
+        print 'Three_a'
         inflow_profile = flow_params.get('inflow_profile',
                                          FlowSolver.inflow_profile)(mesh, degree=2)
+        print 'Three_aa'
         # Define boundary conditions, first those that are constant in time
         bcu_inlet = DirichletBC(V, inflow_profile, surfaces, inlet_tag)
+        print 'Three_aaa'
         # No slip
         bcu_wall = DirichletBC(V, Constant((0, 0)), surfaces, wall_tag)
         bcu_cyl_wall = DirichletBC(V, Constant((0, 0)), surfaces, cylinder_noslip_tag)
         # Fixing outflow pressure
         bcp_outflow = DirichletBC(Q, Constant(0), surfaces, outlet_tag)
-
+        print 'Three_b'
         # Now the expression for the jets
         # NOTE: they start with Q=0
         radius = geometry_params['jet_radius']
@@ -92,50 +94,45 @@ class FlowSolver(object):
         bcu_jet = []
         jet_tags = range(cylinder_noslip_tag+1, cylinder_noslip_tag+1+len(positions))
 
+        print 'Three_c'
         jets = [JetBCValue(radius, width, theta0, Q=0, degree=1) for theta0 in positions]
 
         for tag, jet in zip(jet_tags, jets):
             bc = DirichletBC(V, jet, surfaces, tag)
             bcu_jet.append(bc)
-
+        print 'Four'
         # All bcs objects togets
         bcu = [bcu_inlet, bcu_wall, bcu_cyl_wall] + bcu_jet
         bcp = [bcp_outflow]
 
         As = [Matrix(comm) for i in range(3)]
         bs = [Vector(comm) for i in range(3)]
+        print 'Five'
 
         # Assemble matrices
         assemblers = [SystemAssembler(a1, L1, bcu),
                       SystemAssembler(a2, L2, bcp),
                       SystemAssembler(a3, L3, bcu)]
-
+        print 'Six'
         # Apply bcs to matrices (this is done once)
         for a, A in zip(assemblers, As):
             a.assemble(A)
-
+        print 'Seven'
         # Chose between direct and iterative solvers
         solver_type = solver_params.get('la_solve', 'lu')
         assert solver_type in ('lu', 'la_solve')
 
         if solver_type == 'lu':
-            solvers = map(lambda x: LUSolver('mumps'), range(3))
+            solvers = map(lambda x: LUSolver(comm, 'mumps'), range(3))
         else:
-            solvers = [KrylovSolver('bicgstab', 'hypre_amg'),  # Very questionable preconditioner
-                       KrylovSolver('cg', 'hypre_amg'),
-                       KrylovSolver('cg', 'hypre_amg')]
-
+            assert False
+        print 'Eight'
         # Set matrices for once, likewise solver don't change in time
         for s, A in zip(solvers, As):
             s.set_operator(A)
+            s.parameters['reuse_factorization'] = True
 
-            if solver_type == 'lu':
-                s.parameters['reuse_factorization'] = True
-            # Iterative tolerances
-            else:
-                s.parameters['relative_tolerance'] = 1E-8
-                s.parameters['monitor_convergence'] = True
-
+        print 'Nine'
         gtime = 0.  # External clock
 
         # Things to remeber for evolution
@@ -163,7 +160,8 @@ class FlowSolver(object):
         self.density = rho
         self.normal = n
         self.cylinder_surface_tags = [cylinder_noslip_tag] + jet_tags
-
+        print 'Done'
+        
     def evolve(self, jet_bc_values):
         '''Make one time step with the given values of jet boundary conditions'''
         assert len(jet_bc_values) == len(self.jets)
@@ -207,12 +205,17 @@ class FlowSolver(object):
         '''Parabolic with no slip on vertical'''
         bot = mesh.coordinates().min(axis=0)[1]
         top = mesh.coordinates().max(axis=0)[1]
+        print 'XXXX'
         H = top - bot
 
         Um = 1.5
 
-        return Expression(('-4*Um*(x[1]-bot)*(x[1]-top)/H/H',
-                           '0'), bot=bot, top=top, H=H, Um=Um, degree=degree)
+        #f = Expression(('-4*Um*(x[1]-bot)*(x[1]-top)/H/H',
+        #                '0'), bot=bot, top=top, H=H, Um=Um, degree=degree)
+        f = Constant((1, 0))
+
+        print 'YYYYY'
+        return f
 
 # --------------------------------------------------------------------
 

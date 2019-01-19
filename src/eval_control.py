@@ -58,10 +58,10 @@ def isfinite(values):
 
 def eval_control(control, params, history=None, vtk_io=None, np_io=None):
     '''Evolve environment by f: (t, probe readings) -> scalar'''
-    #
     # Setup flow solver
+    print control, '?'
     solver = FlowSolver(params['flow'], params['geometry'], params['solver'])
-
+    print '\tsolver'
     # Setup probes
     pressures = PressureProbeANN(solver, params['optim']['probe_positions'])
     drag = DragProbeANN(solver)
@@ -69,8 +69,9 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
 
     # Keep track of one jet value. Other is -jet
     Q = 0
+    print '>>>'
     uh, ph, status = solver.evolve(Q*np.ones(len(params['geometry']['jet_positions'])))
-    
+    print 'xx'
     # # Evolve the environment
     T_terminal = params['optim']['T_term']
     alpha = params['optim']['smooth_control']
@@ -90,7 +91,6 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
     
     evolve_okay = True
     while solver.gtime < T_terminal and evolve_okay:
-
         pressure_values = pressures.sample(uh, ph)
         
         evolve_okay = isfinite(pressure_values)
@@ -125,18 +125,12 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
             
         if not evolve_okay: break
 
-        print last_state()
-        
     # Accumulated drag (like RL)
     avg_length = min(500, len(drag_past))
     avg_abs_lift = np.mean(lift_past[-avg_length:])
     avg_drag = np.mean(drag_past[-avg_length:])
     
     score =  -avg_drag # + 0.159 - 0.2*avg_abs_lift
-
-    # Weight the cost by when things broke
-    if not evolve_okay:
-        score *= np.exp(T_terminal/solver.gtime)/np.exp(1)
 
     # Fix history
     if history is not None:
@@ -145,16 +139,7 @@ def eval_control(control, params, history=None, vtk_io=None, np_io=None):
         for field, f in past.items():
             history[field] = f[:l]
 
-    return (score, evolve_okay)
-
-
-# eval without deap expr
-#  - test
-#
-# eval for deap
-#  - test
-#
-# add deap
+    return (score, evolve_okay, (solver.gtime, T_terminal))
 
 # ---------------------------------------------------------------------
 
