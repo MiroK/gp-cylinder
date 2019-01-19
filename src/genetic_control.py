@@ -1,5 +1,5 @@
 # Employ genetic programming to control the mean field problem
-from eval_control import eval_control, VTKIO, NumpyIO
+from eval_control import ControlEvaluator, VTKIO, NumpyIO
 import operator, math, random, sys
 from mpi4py import MPI
 import numpy as np
@@ -15,9 +15,9 @@ geometry_params = {'jet_radius': 0.05,
 solver_params = {'dt': 5E-4}
 
 flow_params = {'mu': 1E-3,
-               'rho': 1}
-               #'u0_file': './mesh/u_init000000.vtu',
-               #'p0_file': './mesh/p_init000000.vtu'}
+               'rho': 1,
+               'u0_file': './mesh/u_init000000.vtu',
+               'p0_file': './mesh/p_init000000.vtu'}
 
 # Optimization
 angles = np.linspace(0, 2*np.pi, 10, endpoint=False)
@@ -36,8 +36,10 @@ params = {'geometry': geometry_params,
           'solver': solver_params,
           'optim': optimization_params}
 
+controller = ControlEvaluator(params)
 
-def eval_control_config(control, toolbox, params=params):
+
+def eval_control_config(control, toolbox, params=params, controller=controller):
     '''Eval using toolbox compiled control -> 1 tuple'''
     # Each cpu runs different
     hash_control = hash(control)
@@ -46,7 +48,7 @@ def eval_control_config(control, toolbox, params=params):
         hash_control = -hash_control*10
 
     vtk_io = None #VTKIO('./results/test/%s' % hash_control, ['uh', 'ph'], 1)
-    np_io = None#NumpyIO('./results/test/%s.txt' % hash_control, 20)
+    np_io = NumpyIO('./results/test/%s.txt' % hash_control, 20)
 
     ctrl = toolbox.compile(expr=control)
     # Make it expression of time as well and compile eventually
@@ -55,8 +57,8 @@ def eval_control_config(control, toolbox, params=params):
         return min(0.01, v) if v > 0 else max(-0.01, v)
 
     # Decisions about cost should be made here
-    score, evolve_okay, (t, T) = eval_control(f, params,
-                                              history=None, vtk_io=vtk_io, np_io=np_io)
+    score, evolve_okay, (t, T) = controller.eval_control(f, 
+                                                         history=None, vtk_io=vtk_io, np_io=np_io)
     # Solver okay and we reached terminal
     if evolve_okay and t > T: return (score, )
 
@@ -69,8 +71,7 @@ def eval_control_config(control, toolbox, params=params):
 # - capping
 # - make sure that init okay
 # - primitives
-#
-#
+
 
 # -----------------------------------------------------------------------------
 
