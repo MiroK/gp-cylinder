@@ -26,7 +26,7 @@ angles = angles[[2, 3, 7, 8]]
 radius = geometry_params['jet_radius']
 probe_positions = np.c_[radius*np.cos(angles), radius*np.sin(angles)]
 
-optimization_params = {'T_term': 2.0,
+optimization_params = {'T_term': 2.0, #.0,
                        'dt_control': 20*solver_params['dt'],
                        'smooth_control': 0.1,
                        'probe_positions': probe_positions}
@@ -39,15 +39,21 @@ params = {'geometry': geometry_params,
 controller = ControlEvaluator(params)
 
 
+def hash_(control):
+    '''Aux help for hashing control expressions (strings)'''
+    hash_control = hash(control)
+    # -121243 is not a good name for file
+    if hash_control < 0:
+        hash_control = -hash_control*10
+    return hash_control
+
+
 def eval_control_config(control, toolbox,
                         vtk_io=(), np_io=(),
                         params=params, controller=controller):
     '''Eval using toolbox compiled control -> 1 tuple'''
     # Each cpu runs different
-    hash_control = hash(control)
-    # -121243 is not a good name for file
-    if hash_control < 0:
-        hash_control = -hash_control*10
+    hash_control = hash_(control)
 
     if vtk_io:
         vtk_io, frq = vtk_io
@@ -89,7 +95,7 @@ def eval_control_config(control, toolbox,
 
 
 if __name__ == "__main__":
-    import argparse, os, pickle, sys, multiprocessing, itertools, time
+    import argparse, os, pickle, sys, multiprocessing, itertools, time, shutil, glob
     from gp_utils import check_point_path, history_path, setup_GP_toolbox
     from mpi_thread import distribute, collect
     from deap import algorithms, tools
@@ -117,6 +123,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    io_dir = 'optimize_drag'
+    
     # -----------------
     
     state_file_template = check_point_path(args)
@@ -124,16 +132,24 @@ if __name__ == "__main__":
 
     history_path = history_path(args)
 
+    io_dir = os.path.join(args.dir_name, io_dir)
     if comm.rank == 0:
+        print '>', io_dir
+
         not os.path.exists(args.dir_name) and os.mkdir(args.dir_name)
 
+        os.path.exists(io_dir) and shutil.rmtree(io_dir)
+
+        not os.path.exists(io_dir) and  os.mkdir(io_dir)
+    comm.Barrier()
+    
     # Toolbox for compilation is needed everywhere
     toolbox = setup_GP_toolbox()
 
     # FIXME
-    def fitness(indiv, toolbox=toolbox):
+    def fitness(indiv, toolbox=toolbox, io_dir=io_dir):
         '''Fitness of the individual'''
-        return eval_control_config(indiv, toolbox, np_io=('./results/test', 20))
+        return eval_control_config(indiv, toolbox, np_io=(io_dir, 20))
     
     # Look at results
     if args.do_plot and comm.rank == 0:
@@ -223,8 +239,17 @@ if __name__ == "__main__":
         
         # Collect on root
         fitnesses = collect(np.array(fitnesses, dtype=float), comm)
+
         # Root breeds:
         if comm.rank == 0:
+            # Get rid of file histories except of the best
+            best_indiv, _ = sorted(zip(map(str, invalid_ind), fitnesses),
+                                   key=lambda (i, f): f)[0]
+            # Rename best
+            shutil.move('%s/%s.txt' % (io_dir, hash_(str(best_indiv))),
+                        '%s/best_%d.TXT' % (io_dir, gen))
+
+            [os.remove(f) for f in glob.glob('%s/*.txt' % io_dir)]
             
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = (fit, )
