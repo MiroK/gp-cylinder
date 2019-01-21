@@ -1,4 +1,4 @@
-jet_positions[] = {2.6, -2.6};  // Always need to be ordered
+jet_positions[] = {1.57079632679, 4.71238898038};  // Always need to be ordered
 
 DefineConstant[
 length = {2.2, Name "Channel length"}
@@ -8,9 +8,9 @@ jet_radius = {0.05, Name "Cylinder radius"}
 jet_width = {10*Pi/180, Name "Jet width in radians"}
 width = {0.41, Name "Channel width"}
 // Mesh size specs
-cylinder_bl_width = {0.1, Name "Thickness of fine region close to cyliner"}
-wake_length = {0.7, Name "Length of fine box region behing cylinder"}
-cylinder_inner_size = {5E-3, Name "Mesh size close to cylinder"}
+cylinder_bl_width = {0.075, Name "Thickness of fine region close to cyliner"}
+wake_length = {1.0, Name "Length of fine box region behing cylinder"}
+cylinder_inner_size = {3E-3, Name "Mesh size close to cylinder"}
 cylinder_outer_size = {7E-3, Name "Mesh size at cylinders's disk"}
 wake_size = {7E-3, Name "Mesh size in the wake"}g
 outlet_size = {1E-1, Name "Mesh size at outlet"}
