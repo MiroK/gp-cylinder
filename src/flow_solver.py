@@ -266,7 +266,7 @@ if __name__ == '__main__':
 
     flow_params = {'mu': 1E-3,
                    'rho': 1}
-    T_final = 2.0
+    T_final = 5.0
 
     # Is there nonzero flow?
     u0_file, p0_file = 'mesh/u_init000000.vtu', 'mesh/p_init000000.vtu'
