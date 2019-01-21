@@ -26,7 +26,7 @@ angles = angles[[2, 3, 7, 8]]
 radius = geometry_params['jet_radius']
 probe_positions = np.c_[radius*np.cos(angles), radius*np.sin(angles)]
 
-optimization_params = {'T_term': 0.1/4,
+optimization_params = {'T_term': 2.0,
                        'dt_control': 20*solver_params['dt'],
                        'smooth_control': 0.1,
                        'probe_positions': probe_positions}
@@ -39,7 +39,9 @@ params = {'geometry': geometry_params,
 controller = ControlEvaluator(params)
 
 
-def eval_control_config(control, toolbox, params=params, controller=controller):
+def eval_control_config(control, toolbox,
+                        vtk_io=(), np_io=(),
+                        params=params, controller=controller):
     '''Eval using toolbox compiled control -> 1 tuple'''
     # Each cpu runs different
     hash_control = hash(control)
@@ -47,8 +49,17 @@ def eval_control_config(control, toolbox, params=params, controller=controller):
     if hash_control < 0:
         hash_control = -hash_control*10
 
-    vtk_io = None #VTKIO('./results/test/%s' % hash_control, ['uh', 'ph'], 1)
-    np_io = NumpyIO('./results/test/%s.txt' % hash_control, 20)
+    if vtk_io:
+        vtk_io, frq = vtk_io
+        vtk_io = VTKIO('%s/%s' % (vtk_io, hash_control), ['uh', 'ph'], frq)
+    else:
+        vtk_io = None
+
+    if np_io:
+        np_io, frq = np_io
+        np_io = NumpyIO('%s/%s.txt' % (np_io, hash_control), frq)
+    else:
+        np_io = None
 
     ctrl = toolbox.compile(expr=control)
     # Make it expression of time as well and compile eventually
@@ -60,7 +71,8 @@ def eval_control_config(control, toolbox, params=params, controller=controller):
     score, evolve_okay, (t, T) = controller.eval_control(f, 
                                                          history=None, vtk_io=vtk_io, np_io=np_io)
     # Solver okay and we reached terminal
-    if evolve_okay and t > T: return (score, )
+    dt = params['solver']['dt']
+    if evolve_okay and t > (T-dt): return (score, )
 
     # Others are weighted by relative distance to terminal
     return (score*math.exp(abs((t - T)*T)), )
@@ -88,7 +100,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # Which module to test?
     parser.add_argument('-check_point', type=str, default='', help='Path to file with dumped state')
-    parser.add_argument('-cp_freq', type=int, default=2, help='Check point frequency')
+    parser.add_argument('-cp_freq', type=int, default=1, help='Check point frequency')
     parser.add_argument('-dir_name', type=str, default='results', help='How to name checkpoint folder')
 
     # Start or continue search
@@ -121,34 +133,38 @@ if __name__ == "__main__":
     # FIXME
     def fitness(indiv, toolbox=toolbox):
         '''Fitness of the individual'''
-        return eval_control_config(indiv, toolbox)
+        return eval_control_config(indiv, toolbox, np_io=('./results/test', 20))
     
-    # # Look at results
-    # # FIXME
-    # # if args.do_plot and comm.rank == 0:
-    # #     assert args.check_point
-    # #     # FIXME
-    # #     data, cost = eval_best_control(args.check_point, toolbox, args.dt)
-    # #     plot_results(data)
+    # Look at results
+    if args.do_plot and comm.rank == 0:
+        # Replay with storing VTK
+        assert args.check_point
 
-    # #     with open(args.check_point, "r") as cp_file:
-    # #         cp = pickle.load(cp_file)
-    # #     logbook = cp['logbook']
+        with open(args.check_point, "r") as cp_file:
+            cp = pickle.load(cp_file)
+        halloffame = cp["halloffame"]
+        best_control = str(halloffame[0])
 
-    # #     gen = int((args.check_point.split('_')[-1]).split('.')[0])
+        T_term = 8  # Normal is 2
+        params['optim']['T_term'] = T_term
 
-    # #     nevals = [r['nevals'] for r in logbook]
-    # #     np.savetxt(('nevals@_%d' % gen )+ history_path, nevals)
+        print 'Eval', best_control, 'until T =', T_term
+        
+        eval_control_config(best_control, toolbox,
+                            np_io=('./results/best', 100),
+                            vtk_io=('./results/best', 100))
+        # FIXME
+        data, cost = eval_best_control(args.check_point, toolbox, args.dt)
 
-    # #     sys.exit(0)
+        sys.exit(0)
 
     # Learn
     stats_fit = tools.Statistics(lambda ind: ind.fitness.values)
     stats_size = tools.Statistics(len)
     mstats = tools.MultiStatistics(fitness=stats_fit, size=stats_size)
+    mstats.register("min", np.min)
     mstats.register("avg", np.mean)
     mstats.register("std", np.std)
-    mstats.register("min", np.min)
     mstats.register("max", np.max)
     
     seed = 123
@@ -180,7 +196,7 @@ if __name__ == "__main__":
 
     # Local workers
     current_min = sys.float_info.max
-    msg = 'Rank %d processed %d individuals in %g s'
+    msg = 'Rank %d processed %d individuals in %g min '
     # Actual search
     for gen in range(start_gen, args.ngen):
         # Root breads
@@ -203,7 +219,7 @@ if __name__ == "__main__":
         dt = time.time()-t0
         nindivs = len(fitnesses)
         
-        print msg % (comm.rank, nindivs, dt)
+        print msg % (comm.rank, nindivs, (dt/60.))
         
         # Collect on root
         fitnesses = collect(np.array(fitnesses, dtype=float), comm)

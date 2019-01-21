@@ -132,6 +132,9 @@ class ControlEvaluator(object):
                 if not evolve_okay: break
                 
             if not evolve_okay: break
+        # Stoke tha finals
+        vtk_io is not None and vtk_io((uh, ph))
+        np_io is not None and np_io(past)
 
         # Accumulated drag (like RL)
         avg_length = min(500, len(drag_past))
