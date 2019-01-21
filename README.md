@@ -5,11 +5,15 @@ Solver instructure is taken from paper's code [base](https://github.com/jerabaul
 Search over the control space is done in parallel using only MPI as threading does not
 play well with FEniCS.
 
-## Notes:
-- Do a dry-run of `genetic_control.py` in serial first to get everything compiled (there
-  are some JIT issues which go away this way)
-
 ## Dependencies
 - FEniCS stack
 - deap
 - gmsh
+
+## Notes
+- Do a dry-run of `genetic_control.py` in serial first to get everything compiled (there
+  are some JIT issues which go away this way)
+
+## TODO
+- [ ] penalize lift
+- [ ] take into cost
