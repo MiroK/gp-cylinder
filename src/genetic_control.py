@@ -26,7 +26,7 @@ angles = angles[[2, 3, 7, 8]]
 radius = geometry_params['jet_radius']
 probe_positions = np.c_[radius*np.cos(angles), radius*np.sin(angles)]
 
-optimization_params = {'T_term': 2.0, #.0,
+optimization_params = {'T_term': 2.0,
                        'dt_control': 20*solver_params['dt'],
                        'smooth_control': 0.1,
                        'probe_positions': probe_positions}
@@ -76,20 +76,19 @@ def eval_control_config(control, toolbox,
     # Decisions about cost should be made here
     score, evolve_okay, (t, T) = controller.eval_control(f, 
                                                          history=None, vtk_io=vtk_io, np_io=np_io)
-    # Solver okay and we reached terminal
-    dt = params['solver']['dt']
-    if evolve_okay and t > (T-dt): return (score, )
+    print score, evolve_okay, (t, T)
 
-    # Others are weighted by relative distance to terminal
+    dt = params['solver']['dt']
+    # Solver okay and we reached terminal
+    if evolve_okay and t > (T-dt): return (score, )
+    
+    # Assign cost to blow up
+    if not evolve_okay and np.isnan(score):
+        score = 1E10
+
+    # Weighted by relative distance to terminal
     return (score*math.exp(abs((t - T)*T)), )
     
-# TODO
-# - reward
-# - solver and eval params as in RL
-# - capping
-# - make sure that init okay
-# - primitives
-
 
 # -----------------------------------------------------------------------------
 
@@ -149,7 +148,9 @@ if __name__ == "__main__":
     # FIXME
     def fitness(indiv, toolbox=toolbox, io_dir=io_dir):
         '''Fitness of the individual'''
-        return eval_control_config(indiv, toolbox, np_io=(io_dir, 20))
+        score, = eval_control_config(indiv, toolbox, np_io=(io_dir, 20))
+        print str(indiv), score
+        return (score, )
     
     # Look at results
     if args.do_plot and comm.rank == 0:
@@ -167,8 +168,8 @@ if __name__ == "__main__":
         print 'Eval', best_control, 'until T =', T_term
         
         eval_control_config(best_control, toolbox,
-                            np_io=('./results/best', 100),
-                            vtk_io=('./results/best', 100))
+                            np_io=('./results/best', 20),
+                            vtk_io=('./results/best', 5))
         # FIXME
         data, cost = eval_best_control(args.check_point, toolbox, args.dt)
 

@@ -33,10 +33,13 @@ def plot_state(path, nprobes=4):
     lines = [ctrl.plot(time, control, 'k-', label='control')[0]]
     # Make the y-axis label, ticks and tick labels match the line color.
 
+    avg_length = min(500, len(drag))
+    avg_drag = -np.mean(drag[-avg_length:])
+
     ax2 = ctrl.twinx()
     lines.append(ax2.plot(time, drag, 'r', label='drag')[0])
     lines.append(ax2.plot(time, lift, 'b', label='lift')[0])
-    print('@t = %g, drag = %g, lift = %g, forcing = %g' % (time[-1], drag[-1], lift[-1], control[-1]))    
+    print('@t = %g, drag = %g, avg_drag = %g, lift = %g, forcing = %g' % (time[-1], avg_drag, drag[-1], lift[-1], control[-1]))    
     ax2.legend(lines, [l.get_label() for l in lines], loc='best')
 
 # --------------------------------------------------------------------
