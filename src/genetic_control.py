@@ -70,8 +70,13 @@ def eval_control_config(control, toolbox,
     ctrl = toolbox.compile(expr=control)
     # Make it expression of time as well and compile eventually
     def f(t, a1, a2, a3, a4, ctrl=ctrl):
-        v = ctrl(a1, a2, a3, a4)
-        return min(0.01, v) if v > 0 else max(-0.01, v)
+        # And invalid v will lead to early termination of eval_control
+        try:
+            v = ctrl(a1, a2, a3, a4)
+            is_valid = True
+        except ValueError:  # math domain error
+            is_valid = False
+        return min(0.01, v) if v > 0 else max(-0.01, v), is_valid
 
     # Decisions about cost should be made here
     score, evolve_okay, (t, T) = controller.eval_control(f, 

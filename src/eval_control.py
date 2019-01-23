@@ -103,8 +103,13 @@ class ControlEvaluator(object):
             
             evolve_okay = isfinite(pressure_values)
             if not evolve_okay: break
-            
-            action = control(solver.gtime, *pressure_values.flatten())
+
+            # The control might raise error in which case it is invalid
+            action, is_valid = control(solver.gtime, *pressure_values.flatten())
+
+            evolve_okay = evolve_okay and is_valid
+            if not evolve_okay: break
+
             for _ in range(nsmooth_steps):
                 # Smoothed action (like RL)
                 if alpha:
@@ -186,10 +191,10 @@ if __name__ == '__main__':
               'solver': solver_params,
               'optim': optimization_params}
 
-    controls = [[lambda t, p0, p1, p2, p3: 1E-2*np.sin(4*np.pi*t),
-                 lambda t, p0, p1, p2, p3: 1E-2*np.cos(4*np.pi*t)],
-                [lambda t, p0, p1, p2, p3: 1E-2*np.sin(2*np.pi*t),
-                 lambda t, p0, p1, p2, p3: 1E-2*np.cos(2*np.pi*t)]]
+    controls = [[lambda t, p0, p1, p2, p3: (1E-2*np.sin(4*np.pi*t), True),
+                 lambda t, p0, p1, p2, p3: (1E-2*np.cos(4*np.pi*t), True)],
+                [lambda t, p0, p1, p2, p3: (1E-2*np.sin(2*np.pi*t), True),
+                 lambda t, p0, p1, p2, p3: (1E-2*np.cos(2*np.pi*t), True)]]
     
     # Each cpu runs different
     rank = MPI.rank(mpi_comm_world())
