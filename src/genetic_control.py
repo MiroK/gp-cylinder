@@ -70,11 +70,13 @@ def eval_control_config(control, toolbox,
     ctrl = toolbox.compile(expr=control)
     # Make it expression of time as well and compile eventually
     def f(t, a1, a2, a3, a4, ctrl=ctrl):
-        # And invalid v will lead to early termination of eval_control
+
         try:
             v = ctrl(a1, a2, a3, a4)
             is_valid = True
-        except ValueError:  # math domain error
+        # And invalid v will lead to early termination of eval_control
+        except ValueError:  # e.g math domain error
+            v = 0
             is_valid = False
         return min(0.01, v) if v > 0 else max(-0.01, v), is_valid
 
@@ -154,7 +156,7 @@ if __name__ == "__main__":
     def fitness(indiv, toolbox=toolbox, io_dir=io_dir):
         '''Fitness of the individual'''
         score, = eval_control_config(indiv, toolbox, np_io=(io_dir, 20))
-        print str(indiv), score
+        # print str(indiv), score
         return (score, )
     
     # Look at results
@@ -215,87 +217,87 @@ if __name__ == "__main__":
         start_gen = None
 
     start_gen = comm.bcast(start_gen, 0)
-
+    print population
     # Local workers
-    current_min = sys.float_info.max
-    msg = 'Rank %d processed %d individuals in %g min '
-    # Actual search
-    for gen in range(start_gen, args.ngen):
-        # Root breads
-        if comm.rank == 0:
-            # Select the next generation individuals
-            offspring = toolbox.select(population, len(population))
+    # current_min = sys.float_info.max
+    # msg = 'Rank %d processed %d individuals in %g min '
+    # # Actual search
+    # for gen in range(start_gen, args.ngen):
+    #     # Root breads
+    #     if comm.rank == 0:
+    #         # Select the next generation individuals
+    #         offspring = toolbox.select(population, len(population))
 
-            # Vary the pool of individuals
-            offspring = algorithms.varAnd(offspring, toolbox, args.cxpb, args.mutpb)
+    #         # Vary the pool of individuals
+    #         offspring = algorithms.varAnd(offspring, toolbox, args.cxpb, args.mutpb)
 
-            # Evaluate the individuals with an invalid fitness
-            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        # Turn to string programs and distribute
-        my_individuals, _ = distribute(map(str, invalid_ind) if comm.rank == 0 else None, comm)
+    #         # Evaluate the individuals with an invalid fitness
+    #         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+    #     # Turn to string programs and distribute
+    #     my_individuals, _ = distribute(map(str, invalid_ind) if comm.rank == 0 else None, comm)
 
-        # Locally eval their fitness
-        t0 = time.time()
+    #     # Locally eval their fitness
+    #     t0 = time.time()
 
-        fitnesses = map(fitness, my_individuals)
-        dt = time.time()-t0
-        nindivs = len(fitnesses)
+    #     fitnesses = map(fitness, my_individuals)
+    #     dt = time.time()-t0
+    #     nindivs = len(fitnesses)
         
-        print msg % (comm.rank, nindivs, (dt/60.))
+    #     print msg % (comm.rank, nindivs, (dt/60.))
         
-        # Collect on root
-        fitnesses = collect(np.array(fitnesses, dtype=float), comm)
+    #     # Collect on root
+    #     fitnesses = collect(np.array(fitnesses, dtype=float), comm)
 
-        # Root breeds:
-        if comm.rank == 0:
-            # Get rid of file histories except of the best
-            best_indiv, _ = sorted(zip(map(str, invalid_ind), fitnesses),
-                                   key=lambda (i, f): f)[0]
-            # Rename best
-            shutil.move('%s/%s.txt' % (io_dir, hash_(str(best_indiv))),
-                        '%s/best_%d.TXT' % (io_dir, gen))
+    #     # Root breeds:
+    #     if comm.rank == 0:
+    #         # Get rid of file histories except of the best
+    #         best_indiv, _ = sorted(zip(map(str, invalid_ind), fitnesses),
+    #                                key=lambda (i, f): f)[0]
+    #         # Rename best
+    #         shutil.move('%s/%s.txt' % (io_dir, hash_(str(best_indiv))),
+    #                     '%s/best_%d.TXT' % (io_dir, gen))
 
-            [os.remove(f) for f in glob.glob('%s/*.txt' % io_dir)]
+    #         [os.remove(f) for f in glob.glob('%s/*.txt' % io_dir)]
             
-            for ind, fit in zip(invalid_ind, fitnesses):
-                ind.fitness.values = (fit, )
+    #         for ind, fit in zip(invalid_ind, fitnesses):
+    #             ind.fitness.values = (fit, )
 
-            # Update the hall of fame with the generated individuals
-            if halloffame is not None:
-                halloffame.update(offspring)
-                current_min, = halloffame.keys[0].getValues()
-                best_history.append(current_min)
+    #         # Update the hall of fame with the generated individuals
+    #         if halloffame is not None:
+    #             halloffame.update(offspring)
+    #             current_min, = halloffame.keys[0].getValues()
+    #             best_history.append(current_min)
 
-                np.savetxt('best_' + history_path, best_history)
-            # Replace the current population by the offspring
-            population[:] = offspring
+    #             np.savetxt('best_' + history_path, best_history)
+    #         # Replace the current population by the offspring
+    #         population[:] = offspring
 
-            # Save all fitness for histogram etc
-            pop_history.append(
-                [p.fitness.getValues()[0] for p in population]
-            )
-            np.savetxt('pop_' + history_path, pop_history)
+    #         # Save all fitness for histogram etc
+    #         pop_history.append(
+    #             [p.fitness.getValues()[0] for p in population]
+    #         )
+    #         np.savetxt('pop_' + history_path, pop_history)
 
-            # Append the current generation statistics to the logbook
-            record = mstats.compile(population) if mstats else {}
-            logbook.record(gen=gen, nevals=len(invalid_ind), **record)
+    #         # Append the current generation statistics to the logbook
+    #         record = mstats.compile(population) if mstats else {}
+    #         logbook.record(gen=gen, nevals=len(invalid_ind), **record)
 
-            # Keep track of number of evaluations
-            nevals = [r['nevals'] for r in logbook]
-            np.savetxt('nevals_' + history_path, nevals)
+    #         # Keep track of number of evaluations
+    #         nevals = [r['nevals'] for r in logbook]
+    #         np.savetxt('nevals_' + history_path, nevals)
 
-            print logbook.stream
+    #         print logbook.stream
 
-            if gen % args.cp_freq == 0 or gen == (args.ngen-1):
-                cp = dict(population=population, 
-                          generation=gen,
-                          halloffame=halloffame,
-                          logbook=logbook,
-                          rndstate=random.getstate())
+    #         if gen % args.cp_freq == 0 or gen == (args.ngen-1):
+    #             cp = dict(population=population, 
+    #                       generation=gen,
+    #                       halloffame=halloffame,
+    #                       logbook=logbook,
+    #                       rndstate=random.getstate())
             
-                state_file = state_file_template % gen
-                with open(state_file, "wb") as cp_file:
-                    pickle.dump(cp, cp_file, -1)
+    #             state_file = state_file_template % gen
+    #             with open(state_file, "wb") as cp_file:
+    #                 pickle.dump(cp, cp_file, -1)
                     
-        # Let root tell everybody about current_min
-        current_min = comm.bcast(current_min, 0)
+    #     # Let root tell everybody about current_min
+    #     current_min = comm.bcast(current_min, 0)
