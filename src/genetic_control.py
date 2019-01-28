@@ -118,6 +118,7 @@ if __name__ == "__main__":
     parser.add_argument('-mutpb', type=float, default=0.3, help='Mutation probability')
     parser.add_argument('-ngen', type=int, default=4, help='Number of generations')
     parser.add_argument('-popsize', type=int, default=8, help='Number of individuals in generation')
+    parser.add_argument('-nunique_iters', type=int, default=5, help='Itercount for uniqueness in population')
 
     # Eval the loaded state
     plot_parser = parser.add_mutually_exclusive_group(required=False)
@@ -196,7 +197,7 @@ if __name__ == "__main__":
             niters = 0
             # Make sure that the individuals in the starting population
             # are unique
-            while len(population) < args.popsize and niters < 5:
+            while len(population) < args.popsize and niters < args.nunique_iters:
                 niters += 1
                 
                 population_ = toolbox.population(n=args.popsize)  # Indivs
@@ -242,7 +243,7 @@ if __name__ == "__main__":
 
             niters = 0
             n_unique = len(set(map(str, offspring)))
-            while n_unique < len(offspring) and niters < 5:
+            while n_unique < len(offspring) and niters < args.nunique_iters:
                 niters += 1
                 print niters, '>> offsize', n_unique
 
@@ -263,11 +264,11 @@ if __name__ == "__main__":
 
         # Locally eval their fitness
         t0 = time.time()
-
+        nindivs = len(my_individuals)
+        
         print 'Rank %d about to process %d individuals' % (comm.rank, nindivs)
         fitnesses = map(fitness, my_individuals)
         dt = time.time()-t0
-        nindivs = len(fitnesses)
         
         print msg % (comm.rank, nindivs, (dt/60.))
         
