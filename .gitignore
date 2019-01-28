@@ -4,3 +4,6 @@
 
 mesh/
 results/
+
+*.txt
+*.xml
