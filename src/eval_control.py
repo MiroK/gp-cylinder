@@ -3,6 +3,9 @@ from flow_solver import FlowSolver
 from dolfin import File, MPI, mpi_comm_world
 import numpy as np
 
+# Complain on errors
+np.seterr(all='raise')
+
 
 class VTKIO(object):
     '''Dump to VTK at intervals'''
@@ -142,6 +145,7 @@ class ControlEvaluator(object):
         np_io is not None and np_io(past)
 
         # Accumulated drag (like RL)
+        
         avg_length = min(500, len(drag_past))
         avg_abs_lift = np.mean(lift_past[-avg_length:])
         avg_drag = np.mean(drag_past[-avg_length:])

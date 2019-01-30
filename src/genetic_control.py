@@ -75,7 +75,7 @@ def eval_control_config(control, toolbox,
             v = ctrl(a1, a2, a3, a4)
             is_valid = True
         # And invalid v will lead to early termination of eval_control
-        except ValueError:  # e.g math domain error
+        except (ValueError, FloatingPointError) as error:  # e.g math domain error
             v = 0
             is_valid = False
         return min(0.01, v) if v > 0 else max(-0.01, v), is_valid
@@ -83,6 +83,11 @@ def eval_control_config(control, toolbox,
     # Decisions about cost should be made here
     score, evolve_okay, (t, T) = controller.eval_control(f, 
                                                          history=None, vtk_io=vtk_io, np_io=np_io)
+    # The cost should be a positive number
+    if score < 0:
+        score *= -1 
+        evolve_okay = False
+
     dt = params['solver']['dt']
     # Solver okay and we reached terminal
     if evolve_okay and t > (T-dt): return (score, )
@@ -266,12 +271,12 @@ if __name__ == "__main__":
         t0 = time.time()
         nindivs = len(my_individuals)
         
-        print 'Rank %d about to process %d individuals' % (comm.rank, nindivs)
+        print 'Rank %d about to process %d individuals\n\t' % (comm.rank, nindivs), my_individuals
         fitnesses = map(fitness, my_individuals)
         dt = time.time()-t0
         
         print msg % (comm.rank, nindivs, (dt/60.))
-        
+        print '%d: fitnesses' % comm.rank, fitnesses
         # Collect on root
         fitnesses = collect(np.array(fitnesses, dtype=float), comm)
 
@@ -281,8 +286,8 @@ if __name__ == "__main__":
             best_indiv, _ = sorted(zip(map(str, invalid_ind), fitnesses),
                                    key=lambda (i, f): f)[0]
             # Rename best
-            #shutil.move('%s/%s.txt' % (io_dir, hash_(str(best_indiv))),
-            #            '%s/best_%d.TXT' % (io_dir, gen))
+            shutil.move('%s/%s.txt' % (io_dir, hash_(str(best_indiv))),
+                        '%s/best_%d.TXT' % (io_dir, gen))
 
             [os.remove(f) for f in glob.glob('%s/*.txt' % io_dir)]
             
@@ -328,3 +333,6 @@ if __name__ == "__main__":
                     
         # Let root tell everybody about current_min
         current_min = comm.bcast(current_min, 0)
+        
+        # FIXME: handle overflow
+        #        the cost (should be positive!)
